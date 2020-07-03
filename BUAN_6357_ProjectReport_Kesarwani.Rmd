@@ -1,0 +1,965 @@
+---
+title: "Analysis and  Tweets sentiment prediction using  US Airline Twitters Dataset"
+author: "Minakshi Kesarwani"
+Net ID: "mxk180035"
+date: "11/21/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,fig.align = 'center',fig.width=8, fig.height=8,warning = FALSE)
+```
+
+# 1) Project Goal:
+
+  To build a machine learning model that tries to predict the negative and positive sentiment of tweets relating to US airlines using   **Twitter US airline sentiment** dataset followed by categorizing negative reasons (such as "late flight" or "rude service"). 
+  
+  It will provide the airline industry more comprehensive views about the sentiments of their customers. With recent development in machine learning algorithms, using the power of sentiment analysis now the airline industry can analyze tweets and enhance their customer services.
+
+# 2) Executive Summary :
+
+ This project uses **sentiment analysis** which is one of the most popular applications of **natural language processing (NLP)** that  determines the sentiment or emotion of a piece of text. The dataset is called **Twitter US Airline Sentiment** which was downloaded from Kaggle as a CSV file. Its source was **Crowdflowers Data for Everyone library**. It contains details of **14640 tweets** posted on Twitter in a week of **February 2015** about each major US airline. In this project, I started with **exploratory data analysis** to analyze the distribution of sentiment of the tweets, identify which airline has a greater number of negative tweets and what is the reason behind those negative tweets. Furthermore, using the **bag of word technique** transformed document into a vector to prepare train and test data and used various machine learning algorithms like **Decision Tree, Random Forest and SVM (Support Vector Machine)** to train corresponding models and validate their accuracy in predicting the sentiment of the test set. Since the data set is highly imbalanced (79% negative tweets vs 21% positive tweets), I have used **F1 score** and **AUC score** evaluation metrics to identify the best machine learning model built in this project.
+ 
+# 3) Dataset Summary :
+
+*	This dataset contains tweets about 6 US airlines(American, Delta,Southwest, United, US Airways, Virgin America).
+  +  Mean length of tweets:- (about 17.61 words in length), 
+  +  Max length of tweets: 35
+  +  Min length of tweets: 1 
+  +  Shape of dataset: 14640(observation), 15(variables)
+  
+*	'Negative tweets' will be the class of Interest. 
+* **Datsource**: https://www.kaggle.com/crowdflower/twitter-airline-sentiment
+  
+
+
+## Load required packages  
+
+_Load Packages only if not present locally _
+
+```{r loadpackages, include=FALSE}
+
+if(!require('pacman'))install.packages('pacman')
+pacman::p_load(dplyr,tidyverse, ggplot2,gridExtra, wordcloud, rmarkdown,cowplot,leaflet,maps, ggcorrplot,knitr,GGally,purrr,reshape,caret,tm,e1071,randomForest,rpart,rpart.plot,saotd,plotly,ROCR,caTools,pROC)
+search()
+theme_set(theme_classic())
+options(digits = 3)
+
+```
+
+# 4) Exploratory data analysis:
+
+## a) Read dataset, check its structure and dimension
+
+```{r read tweet dataset}
+
+tweet_df <-read.csv("Tweets.csv")
+str(tweet_df) # structure of Tweet 
+dim(tweet_df) # Dimension of tweet
+
+```
+
+**Interpretation:** The dataset contains **14640 tweets (observation) and 15 variables (columns)**.
+
+## b) Check for missing values in the data set
+
+```{r Missing value}
+
+tweet <- as.data.frame(apply(tweet_df, 2, function(x) gsub("^$|^ $", NA, x)))
+tweet_NA <- as.data.frame(apply(tweet, 2, function(x) sum(is.na(x))))
+
+tweet_Missing <- cbind(Row.Names = rownames(tweet_NA), tweet_NA)
+rownames(tweet_Missing) <- NULL
+
+colnames(tweet_Missing) <- c("Variable_Name","Missing_value")
+
+kable(tweet_Missing,caption = "Number of missing value per column ",format = "pandoc")
+
+# plot barchart
+gbar = ggplot(tweet_Missing, aes(x = Variable_Name, y = Missing_value, fill = Variable_Name))
+gbar + geom_bar(stat = 'identity')  + ggtitle('Number of missing values by variables') + geom_text(aes(label=(Missing_value),vjust=1))+
+guides(fill = FALSE) + theme(plot.title = element_text(size = 14, face = 'bold', vjust = 1))+ theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+**Interpretation:** Out of 15 columns, 7 columns contains missing values. Since the column of interest are **airline_sentiment** and **text** and these do not contain any missing value, there is no need to handle missing values.  
+
+
+## c) Number of tweets per airline
+
+```{r tweets_per_airline}
+
+tweet_dis<-as.data.frame(table(tweet_df$airline))
+colnames(tweet_dis) <-c('Airline', 'Frequency')
+kable(tweet_dis,caption = "Timezone vs Frequency of tweets",format = "pandoc")
+
+
+# plot barchart
+gbar = ggplot(tweet_dis, aes(x = Airline, y = Frequency, fill = Airline))
+gbar + geom_bar(stat = 'identity') + scale_fill_brewer() + ggtitle('Number of tweets per airline') + geom_text(aes(label=(Frequency),vjust=1))+
+guides(fill = FALSE) + theme(plot.title = element_text(size = 14, face = 'bold', vjust = 1))
+
+```
+**Interpretation:** Most of the tweets are directed towards **United Airlines**, followed by **American Airlines** and **US Airways**. Very few tweets are targeted towards **Virgin America**.
+
+
+## d) Checking ratio of negative, positive and neutral sentiment
+
+```{r tweet sentiment ratio}
+
+tweet_ratio <- as.data.frame(prop.table(table(tweet_df$airline_sentiment)))
+colnames(tweet_ratio) = c('Sentiment', 'Frequency')
+
+kable(tweet_ratio, caption = "Distribution of negative, positive and neutral sentiment",format = "pandoc")
+
+## overall tweet sentiment ratio 
+gbar <- ggplot(tweet_ratio, aes(x = Sentiment, y = Frequency, fill = Sentiment))
+gbar + geom_bar(stat = 'identity',color = "black",position = "dodge") +scale_fill_manual(values = c("#D00681","#7b8083","#288fdd"))+ ggtitle("Overall Sentiment") + geom_text(aes(label=round(Frequency,digits=3),vjust=1))+
+        theme(plot.title = element_text(size = 14, face = 'bold', vjust = 1),
+              axis.title.y = element_text(vjust = 2), axis.title.x = element_text(vjust = -1))
+
+## tweet sentiment ratio/airline
+tweet_ratio_PerAirline <- as.data.frame(prop.table(table(tweet_df[,c("airline","airline_sentiment")]))*100)
+colnames(tweet_ratio_PerAirline) <- c("Airline","Airline_Sentiment","Proportion_of_Sentiment")
+
+
+ ggplot(tweet_ratio_PerAirline,aes(x = Airline, y = Proportion_of_Sentiment,fill =   Airline_Sentiment))+geom_bar(stat="identity",color = "black",position = "dodge")+scale_fill_manual(values = c("#D00681","#7b8083","#288fdd"))+geom_text(aes(label=round(Proportion_of_Sentiment,digits=1), vjust=-0.2),position = position_dodge(width = 1))+ ggtitle("Sentiment proportion by airline")
+
+
+
+```
+**Interpretation:** 
+1) It can be seen from the **Overall Sentiment** bar plot as well as from the pie chart that about _62.7%_ tweets contain negative sentiment.
+2) **Sentiment proportion per airline** bar plot displays that **United airlines** has maximum negative tweet and **Virgin  America** has least negative tweet.
+                    
+## e) Reason for negative sentiment tweet per flight
+
+```{r reason for negative tweet for each flight }
+
+## Remove the rows which has missing value for negative reason
+tweet_NR <- tweet_df[!tweet_df$negativereason=="",]
+tweet_NR_Plot<- as.data.frame(prop.table(table(tweet_NR[,c("negativereason","airline")]))*100)
+colnames(tweet_NR_Plot) <- c("Negative_Reason","Airline","Proportion_of_Negative_Reason")
+
+tweet_NR_Plot$Proportion_of_Negative_Reason<-round(tweet_NR_Plot$Proportion_of_Negative_Reason,digits = 2)
+
+### Analyze negative reason for each flight individually
+# American Airline
+tweet_NR_American <- subset(tweet_NR_Plot,Airline=="American"& Proportion_of_Negative_Reason!=0.00)
+ggplot(tweet_NR_American,aes(x=reorder(Negative_Reason,-Proportion_of_Negative_Reason),y=Proportion_of_Negative_Reason,fill=Airline))+geom_bar(stat="identity",position="dodge")+scale_fill_brewer(palette = "Dark2")+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+geom_text(aes(label=Proportion_of_Negative_Reason), vjust=-1)+ggtitle("Proportion of Negative reasons for American airline ")+
+ xlab("Negative Reason") 
+
+# Delta Airline
+
+tweet_NR_Delta <- subset(tweet_NR_Plot,Airline=="Delta"& Proportion_of_Negative_Reason!=0.00)
+ggplot(tweet_NR_Delta,aes(x=reorder(Negative_Reason,-Proportion_of_Negative_Reason),y=Proportion_of_Negative_Reason,fill=Airline))+geom_bar(stat="identity",position="dodge")+scale_fill_brewer(palette = "Dark2")+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+geom_text(aes(label=Proportion_of_Negative_Reason), vjust=-1)+ggtitle("Proportion of Negative reasons for Delta airline ")+
+ xlab("Negative Reason")
+
+# Southwest Airline
+
+tweet_NR_Southwest <- subset(tweet_NR_Plot,Airline=="Southwest" & Proportion_of_Negative_Reason!=0.00)
+ggplot(tweet_NR_Southwest,aes(x=reorder(Negative_Reason,-Proportion_of_Negative_Reason),y=Proportion_of_Negative_Reason,fill=Airline))+geom_bar(stat="identity",position="dodge")+scale_fill_brewer(palette = "Dark2")+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+geom_text(aes(label=Proportion_of_Negative_Reason), vjust=-1)+ggtitle("Proportion of Negative reasons for Southwest airline ")+
+ xlab("Negative Reason")
+
+# United Airline
+
+tweet_NR_United <- subset(tweet_NR_Plot,Airline=="United" & Proportion_of_Negative_Reason!=0.00)
+ggplot(tweet_NR_United,aes(x=reorder(Negative_Reason,-Proportion_of_Negative_Reason),y=Proportion_of_Negative_Reason,fill=Airline))+geom_bar(stat="identity",position="dodge")+scale_fill_brewer(palette = "Dark2")+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+geom_text(aes(label=Proportion_of_Negative_Reason), vjust=-1)+ggtitle("Proportion of Negative reasons for United airline ")+
+ xlab("Negative Reason")
+
+# USAirways Airline
+tweet_NR_USAirways <- subset(tweet_NR_Plot,Airline=="US Airways"& Proportion_of_Negative_Reason!=0.00)
+ggplot(tweet_NR_USAirways,aes(x=reorder(Negative_Reason,-Proportion_of_Negative_Reason),y=Proportion_of_Negative_Reason,fill=Airline))+geom_bar(stat="identity",position="dodge")+scale_fill_brewer(palette = "Dark2")+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+geom_text(aes(label=Proportion_of_Negative_Reason), vjust=-1)+ggtitle("Proportion of Negative reasons for US Airways airline ")+
+ xlab("Negative Reason")
+
+
+# VirginAmerica Airline
+tweet_NR_VirginAmerica <- subset(tweet_NR_Plot,Airline=="Virgin America" & Proportion_of_Negative_Reason!=0.00)
+ggplot(tweet_NR_VirginAmerica,aes(x=reorder(Negative_Reason,-Proportion_of_Negative_Reason),y=Proportion_of_Negative_Reason,fill=Airline))+geom_bar(stat="identity",position="dodge")+scale_fill_brewer(palette = "Dark2")+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+geom_text(aes(label=Proportion_of_Negative_Reason), vjust=-1)+ggtitle("Proportion of Negative reasons for Virgin America airline ")+
+ xlab("Negative Reason")
+
+
+
+```
+
+**Interpretation:**  
+1) Overall, we see that most negative sentiments are due to **_Customer Service Issue (presumably bad customer service)_**.
+2) **_United_** and **_US airways_** have a number of complaints for **_Customer Service Issues_** followed closely by **_Late Flights_**.
+3) For **_American airlines_**, negative sentiment is elicited mostly by **_Customer Service Issues_**, and not so much for **_Late Flights_**. **_Southwest and virgin Airline_** have similar reasons for negative tweets.
+4) **_Virgin America_** seems to have a sub-optimal booking system, as **_booking problems_** is the second reason eliciting bad   sentiment in the tweets.
+5) For **_Delta_**, on the contrary, most of the complaints are due to **_late flights_**. They show a perhaps **_better customer service_** compared to other airlines.                    
+
+## f) Timezone of tweets
+
+```{r tweettimeZone}
+
+timezone = as.data.frame(prop.table(table(tweet_df$user_timezone)))
+colnames(timezone) = c('Timezone', 'Frequency')
+timezone = timezone[order(timezone$Frequency, decreasing = TRUE),]
+row.names(timezone) <- NULL
+#head(timezone, 10)
+kable(timezone[1:10,],caption = "Timezone vs Frequency Table",format = "pandoc")
+
+```
+
+**Interpretation:** Majority of tweets coming from _Eastern time zone_ and almost all the tweets come from _US & Canada time zone_.
+
+## g) Location of tweets
+
+```{r tweetLocation}
+
+location <- tweet_df$tweet_coord
+#sapply(location, function(x) sum(is.na(x)))
+
+##14640-13621=1019 twwets cordinate known most of them have missing data
+
+location <- location[complete.cases(location)] # remove NAs
+location <- as.data.frame(location)
+
+location$count <-  1 # add a count column filled with 1s
+
+location$location <- as.character(location$location) # as location is factor convert to character
+#remove duplicate locations and count the times they appeared, write the count in the count column
+location <- aggregate(count~location, data = location, FUN = sum)
+location <- location[-5,] # removes row containing coords [0,0] which are probably wrong
+coords <- strsplit(location$location, ',') 
+
+# separate lat and long from location 
+lat = NULL
+long = NULL
+for (i in 1:length(coords)) {
+    lat = c(lat, substring(coords[[i]][1], 2)) # removes first character which is [
+    long = c(long, coords[[i]][2]) 
+}
+
+location$lat = lat
+location$long = long
+
+# remove ]
+location$long = substr(location$long, 1, nchar(location$long)-1)
+
+location$lat = as.numeric(location$lat)
+location$long = as.numeric(location$long)
+   
+# 
+#  leaflet(location) %>%
+#       addProviderTiles("CartoDB.Positron") %>%
+#       #addTiles()%>%
+#       addAwesomeMarkers(
+#         lat = location$lat, lng = location$long,
+#         clusterOptions = markerClusterOptions()
+#         )
+
+
+world_map <- map_data("world")
+g1 = ggplot()
+g1 = g1 + geom_polygon(data=world_map, aes(x=long, y=lat, group = group), colour="black", fill = 'lightblue') + 
+ggtitle("Location of tweets across the world")
+g1 = g1 + geom_point(data=location, aes(x=long, y=lat, size = count), color="coral1") + scale_size(name="Total Tweets")
+g1 = g1 + ylim(-50, 80)
+
+states <- map_data("state")
+g2 = ggplot()
+g2 =g2 + geom_polygon(data=states, aes(x=long, y=lat, group = group), colour="black", fill = 'lightblue') + 
+ggtitle("Location of tweets across the United States")
+g2 = g2 + geom_point(data=location, aes(x=long, y=lat, size = count), color="coral1") + scale_size(name="Total Tweets")
+g2 = g2 + xlim(-125, -65) + ylim(25, 50)
+#grid.arrange(g, ncol=1, nrow = 2)
+
+grid.arrange(g1, g2, ncol=1, nrow = 2)
+
+```
+
+**Interpretation:** Majority of tweets are coming from United states.
+
+
+## h) Timeline for negative tweets
+```{r NegativetweetTimeline}
+tweet_df$date <-  as.Date(tweet_df$tweet_created)
+# Overall negative sentiment overtime
+negativeTweets <- tweet_df %>% filter(airline_sentiment=="negative")
+negativeTweetsByDate <- negativeTweets %>% group_by(date) %>% dplyr::summarise(count = n())
+negativeTweetsByDatePlot <- ggplot() +geom_point()+geom_line(data=negativeTweetsByDate, aes(x=date, y=count, group = 1))+ggtitle("Plot 1: Overall negative sentiment over time") 
+negativeTweetsByDatePlot
+
+
+###which flight had most negative feedback on 22nd FEB
+negativeTweetsByDateByAirline <- negativeTweets %>% group_by(airline,date) %>% dplyr::summarise(count = n())
+negativeTweetsByDateByAirlinePlot = ggplot() + geom_line(data=negativeTweetsByDateByAirline, aes(x=date, y=count, group =airline , color=airline)) +ggtitle("Plot 2: Negative tweet trend for all airlines")  
+negativeTweetsByDateByAirlinePlot
+
+```
+**Tweet Timeline Interpretation:** 
+1) Plot 1- It shows that there was a _spike in negative tweet on 22ND February_.
+2) Plot 2- When analysed for each flight it appeared that the **negative tweets were more for American airline on 22ND February**. Something look suspicious as till 21st February count was 0 and suddenly it spiked and reached maximum.
+
+## i) Word cloud for most frequent negative sentiment
+
+```{r wc_negative}
+
+# these words appear quite frequently in tweets and in my opinion are not informative,
+# so I will remove them"
+wordsToRemove = c('get', 'cant', 'can', 'now', 'just', 'will', 'dont', 'ive', 'got', 'much','not')
+
+docs_neg <- Corpus(VectorSource(negativeTweets$text))
+docs_neg <- tm_map(docs_neg, content_transformer(tolower))
+docs_neg <- tm_map(docs_neg, removeNumbers)
+docs_neg <- tm_map(docs_neg, removeWords, stopwords("english"))
+docs_neg <- tm_map(docs_neg, removeWords, c("usairways" ,"united", "flight" , "americanair" , "jetblue" , "southwestair"))
+docs_neg = tm_map(docs_neg, removeWords, wordsToRemove)
+docs_neg <- tm_map(docs_neg, removePunctuation)
+docs_neg <- tm_map(docs_neg, stripWhitespace)
+
+
+
+dtm_n <- TermDocumentMatrix(docs_neg)
+sparse_n = removeSparseTerms(dtm_n, 0.97) # keeps a matrix 97% sparse
+m <- as.matrix(sparse_n)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+
+
+# showing top 30 most negative word
+wordcloud(words = d$word, freq = d$freq, min.freq = 1,
+          max.words=30, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+
+```
+**Negative Word cloud Interpretation:** From above displayed word cloud, as expected words like _Cancelled, delayed, customet service_ are appearing in negative tweets.
+
+## j) Word cloud for most frequent positive sentiment
+```{r wc_positive}
+
+wordsToRemove = c('get', 'cant', 'can', 'now', 'just', 'will', 'dont', 'ive', 'got', 'much')
+positiveTweets <- tweet_df %>% filter(airline_sentiment=="positive")
+docs_pos <- Corpus(VectorSource(positiveTweets$text))
+docs_pos <- tm_map(docs_pos, content_transformer(tolower))
+docs_pos <- tm_map(docs_pos, removeNumbers)
+docs_pos <- tm_map(docs_pos, removeWords, stopwords("english"))
+docs_pos <- tm_map(docs_pos, removeWords, c("usairways" ,"united", "flight" , "americanair" , "jetblue" , "southwestair")) 
+docs_pos = tm_map(docs_pos, removeWords, wordsToRemove)
+docs_pos <- tm_map(docs_pos, removePunctuation)
+docs_pos <- tm_map(docs_pos, stripWhitespace)
+
+
+dtm_p <- TermDocumentMatrix(docs_pos)
+sparse_p = removeSparseTerms(dtm_p, 0.97)
+m <- as.matrix(sparse_p)
+v <- sort(rowSums(m),decreasing=TRUE)
+d_p <- data.frame(word = names(v),freq=v)
+#head(d_p, 10)
+
+# showing top 40 most positive word
+wordcloud(words = d_p$word, freq = d_p$freq, min.freq = 1,
+          max.words=40, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+
+```
+**Positive Word cloud Interpretation:** From above displayed word cloud, as expected words like **thanks, great, love, amazing, and Virgin America** (which had least negative tweet appearing in word cloud)
+
+# 5) Tweet text visualization to strategies classification algorithm :
+
+## a) Remove neutral tweets from dataset and check proportion of negative and positive tweets
+* Created a new dataset containing only negative and positive sentiment tweets and airline sentiment and text column only
+* Removed @ sign from each text
+```{r PositiveNeagtiveTweet}
+
+tweet_NegPos <- filter(tweet_df, airline_sentiment != 'neutral') # filter out neutral tweet
+tweet_NegPos$airline_sentiment <- droplevels(tweet_NegPos$airline_sentiment)
+
+tweet <-tweet_NegPos # Assign filtered Negative positive tweet to tweet
+
+# Display positive and negative tweet ratio
+tweet_ratio <- as.data.frame(prop.table(table(tweet$airline_sentiment))*100)
+colnames(tweet_ratio) = c('Sentiment', 'Frequency')
+
+kable(tweet_ratio,format = 'markdown',caption = "Sentiment proportion of negative and Postive tweets")
+
+
+
+# create subset with only sentiment and text column
+tweet_subset <- subset(tweet, select=c('airline_sentiment', 'text')) 
+tweet_subset$airline_sentiment <- as.factor(tweet_subset$airline_sentiment)
+
+
+################################# TIDY DATA #################################
+# Remove addressee which appears as @<name> as this is common across all tweet e.g @United or @virgin
+tweet_subset$text <- gsub("^@\\w+ *", "", tweet_subset$text) 
+#tweet_subset_merged<-tweet_subset
+
+
+```
+**Interpretation:** Dataset contains **79.5% Negative tweet and 20.5% positive tweets.**
+
+## b) Tweet text Unigram and Bigram word frequency and Bigram network visualization 
+
+```{r Tweet text network_Visualization,message=FALSE}
+
+tweet_data<-tweet_subset
+
+#Function to tidy twitter data and remove all emoticons, punctuation, weblinks,stopwords and stems the remaining words while maintaiing actual tweet.
+
+
+ TD_Tidy <- saotd::tweet_tidy(DataFrame = tweet_data)
+
+ # viewing top n unigrams based on how many times they appeared
+ uni_df<-saotd::unigram(DataFrame = tweet_data) %>%
+   dplyr::top_n(10)  %>%  
+    as.data.frame()
+ kable( uni_df, format = 'pandoc',caption = "Twitter data Uni-Grams")
+
+
+ 
+ # viewing top n bigram based on how many times they appeared
+
+ bi_df<-saotd::bigram(DataFrame = tweet_data) %>%
+   dplyr::top_n(10)  %>%  as.data.frame()
+ kable( bi_df, format = 'pandoc',caption = "Twitter data Bi-Grams")
+ 
+ TD_Bigram <- saotd::bigram(DataFrame = tweet_data)
+
+
+ #showing the bigram network with bigrams occuring more than "number" times
+ saotd::bigram_network(BiGramDataFrame = TD_Bigram,
+                       number = 30,
+                       layout = "fr",
+                       edge_color = "blue",
+                       node_color = "black",
+                       node_size = 3,
+                       set_seed = 1234)
+```
+
+**Interpretation:** From above bigram network visualization, it can be seen that **Customer and service** word appeared almost 534 times adjacent to each other, similarly **Cancelled flightled** appeared 450 adjacent to each other similarly late flight. 
+
+## c) Merged words which commonly occur together based on Bigram high frequency value 
+
+**To make our bag of word technique more meaningful, we can merge frequently occurring adjacent words**. Let say, if we have customer and service as separate word It will not make much sense but if we can merge whenever customer and service are present together then we will get inference tweet is talking about customer service.
+
+```{r MergeHighFrequencyBigramWord,message=FALSE}
+
+
+################################# ENCODE KEY BIGRAMS AS UNIGRAMS #################################
+
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset, term = "cancelled flight", term_replacement = "cancelledFlight")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "customer service", term_replacement = "customerService")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "late flight", term_replacement = "lateFlight")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "gate agent", term_replacement = "gateagent")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "flight booking", term_replacement = "flightbookin")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "flight attendant", term_replacement = "flightattendant")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "connecting flight", term_replacement = "connectingflight")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "hour delay", term_replacement = "hourdelay")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "worst airline", term_replacement = "connectingflight")
+tweet_subset_merged <- merge_terms(DataFrame = tweet_subset_merged, term = "worst customerservice", term_replacement = "worstcustomerservice")
+
+TD_Bigram_mer <- saotd::bigram(DataFrame = tweet_subset_merged)
+
+
+##showing the bigram network after merging high frequency word
+saotd::bigram_network(BiGramDataFrame = TD_Bigram_mer,
+                      number = 30,
+                      layout = "fr",
+                      edge_color = "blue",
+                      node_color = "black",
+                      node_size = 3,
+                      set_seed = 1234)
+
+```
+
+
+
+
+# 6) Preprocess the Data :
+## a) Tweet cleaning and creating corpus
+
+* Created a corpus contain each possible word from all sentences written in the text column
+* Put every word into lower case
+* Then removed punctuation, English stop words, strip white spaces, and stem each word. 
+* **Note 1:** Here I have made changes in English.dat file. As on removing stop words all the negative words were also getting removed. Therefore, i have removed those negative words from enlish.dat file such as **isn't, aren't, wasn't, weren't, hasn't, haven't, hadn't, doesn't, don't, didn't, won't, wouldn't, shan't, shouldn't,  can't, cannot, couldn't, mustn't, no , not**. As some tweets conatians sarcastic word incorporating these negative word in tweet really helped in improving the accuracy of model.
+
+* **Note 2:** To execute these code, user has to delete above mentioned word from  enlish.dat file.
+
+```{r DataCleaningUsing Corpus}
+################################# CREATE CORPUS #################################
+# these words appear quite frequently in tweets and in my opinion are not informative,
+# so I will remove them"
+wordsToRemove = c('get', 'cant', 'can', 'now', 'just', 'will', 'dont', 'ive', 'got', 'much','flight')
+
+corpus <- VCorpus(VectorSource(tweet_subset_merged$text)) #save text into corpus
+corpus <- tm_map(corpus, content_transformer(tolower)) # transfor to low case
+corpus <- tm_map(corpus, PlainTextDocument, lazy = T) # creat a plain text document
+corpus <- tm_map(corpus, removePunctuation)  # remove punctuation
+corpus <- tm_map(corpus, removeWords, stopwords(kind = "english")) # remove stop words
+corpus <- tm_map(corpus, removeWords, wordsToRemove)
+corpus <- tm_map(corpus, stripWhitespace) # remove any white space
+corpus <- tm_map(corpus, removeNumbers) # remove any number
+corpus <- tm_map(corpus, stemDocument)
+```
+
+
+## b) Corpus frequency plot and word cloud
+
+```{r corpus frequency plot and word cloud}
+dtm_uni <- TermDocumentMatrix (corpus)
+
+# frequent terms with a low frequency of 600 (min no. of times a term must be displayed to appear)
+#findFreqTerms(dtm_uni, lowfreq = 600)
+
+freq.matrix <- as.matrix(dtm_uni)
+term.freq <- sort(rowSums(freq.matrix), decreasing = TRUE)
+term.df <- data.frame(term=names(term.freq), freq=term.freq)
+
+## bar plot
+plot <- ggplot(subset(term.df, term.df$freq > 600 & term.df$freq < 1464), aes(reorder(term,-freq), freq, fill=freq)) + geom_bar(stat='identity') + labs(x='Terms', y='Count', title='Term Frequencies') 
+plot + coord_flip()
+
+
+# word cloud
+wordcloud(term.df$term, term.df$freq, min.freq=25, max.words = 250, random.order = FALSE, colors= brewer.pal(8, 'Dark2'))
+```
+**Interpretation:** We can see that both word cloud and Bar plot shows a high frequency of these words **thank, not, hour, cancelledflight, 'customerservice'**  in our tweets. Similar words were observed when we made word cloud for positive and Negative tweets individually. As most of the tweets are negative some with the sarcastic word. So having a high frequency of words like cancelled flight, customerService , thank, wait , hour, delay support our investigation.
+
+## c) Create a Document Term Matrix and split data into training(0.70) and test set(0.30)
+
+**Note: As we are dealing with tweet texts here and every tweet will have different text, to train other models it is better to incorporate more word but as computer computation power slows down when we train with more words, I kept only terms that appear in 0.7% or more of tweets).**
+```{r DTM Unigram and split into test and train }
+
+################################# APPLY DTM TO TWITTER TEXT and Set Sparsity #################################
+tweet_dtm_uni <- DocumentTermMatrix (corpus)
+tweet_dtm_uni
+# Remove terms that appear in less than 0.7% of the document/observation
+tweet_dtm_uni <- removeSparseTerms(tweet_dtm_uni, 0.993) 
+tweet_dtm_uni
+tweet_dtm_uni <- as.data.frame(as.matrix(tweet_dtm_uni))
+colnames(tweet_dtm_uni) <- make.names(colnames(tweet_dtm_uni))
+
+# Combine data frame generated from TRM with original data set to get original columns
+tweet_dtm_uni_all <- cbind(tweet_subset, tweet_dtm_uni)
+
+# Get rid of the original Text field
+tweet_dtm_uni_all$text <- NULL
+#colnames(tweet_dtm_uni_all)
+
+################################# TRAIN/TEST SPLIT  #################################
+
+set.seed(123)
+dt <- sort(sample(nrow(tweet_dtm_uni_all), nrow(tweet_dtm_uni_all)*.7))
+tweet_train_dtm_uni_all<-tweet_dtm_uni_all[dt,]
+tweet_test_dtm_uni_all<-tweet_dtm_uni_all[-dt,]
+
+```
+**Interpretation:** 
+* We can see that DTM has 11541 documents and 9813 terms. This document has a lot of sparse terms.
+* Removed terms that dont appear often (keep only terms that appears in 0.7% or more of tweets). 
+
+
+                    
+# 7) Build the Models :
+* **Strategy to build model: **
+* Started with finding out how to identify word out of tweets which will help in the proper prediction of the class of interest. 
+* Initially, used unigram method, was getting good accuracy with the decision tree model. Then tried Bigram and again used the decision tree algorithm, accuracy was little less than the unigram model. 
+* Later, merged high-frequency words which were adjacent in the bigram network. After merging again executed the decision tree on Unigram with merged word and bigram with the merged word. As expected accuracy was improved from 0.84 to 0.86 for unigram with the merged word not much although. 
+* Executed Models: Logistic Regression(performed really bad in terms of prediction), Naive Bayes, Decision Tree, Random Forest, Support Vector Machine (Kernel: Linear)
+**Note:** As Logistic regression and Naive Bayes was not giving good accuracy kept their execution result in appendix
+
+## (A) Model based on Unigram
+### a) Decision Tree Unigram(merged word) Model
+
+```{r UNIGRAM(merged term) DECISION TREE}
+
+################################# RUN DECISION TREE MODEL #################################
+set.seed(123)
+DTmodel_uni <- rpart(airline_sentiment ~ ., data = tweet_train_dtm_uni_all, method = "class",minsplit = 1, maxdepth = 10)
+
+##Train Set
+DTmodel_predict_uni_train <- predict(DTmodel_uni, tweet_train_dtm_uni_all, type = "class")
+CM_DT_Uni_Train<-confusionMatrix(DTmodel_predict_uni_train, tweet_train_dtm_uni_all$airline_sentiment)
+
+## Test set
+DTmodel_predict_uni_test <- predict(DTmodel_uni, tweet_test_dtm_uni_all, type = "class")
+# generate confusion matrix for training data
+CM_DT_Uni_Test<-confusionMatrix(DTmodel_predict_uni_test, tweet_test_dtm_uni_all$airline_sentiment)
+
+
+fourfoldplot(CM_DT_Uni_Test$table, main = "Confusion Matrix for test set",conf.level = 0, margin = 1)
+Trainscore_error_DT_Uni<- round((1-CM_DT_Uni_Train$overall["Accuracy"]),4)
+Testscore_error_DT_Uni<- round((1-CM_DT_Uni_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_DT_Uni),"Test score error:",unname(Testscore_error_DT_Uni),sep="\n")
+
+
+
+# plot tree
+rpart.plot(DTmodel_uni, box.palette="RdBu", shadow.col="gray", nn=TRUE,type = 2,extra = 2,under = FALSE, split.font = 1, varlen = -10)
+#prp(DTmodel_uni, box.palette="RdBu", shadow.col="gray", nn=TRUE,type = 2,extra = 2,under = FALSE, split.font = 1, varlen = -10)
+
+# # pruned tree
+# max.ct_uni <- rpart(airline_sentiment ~ ., data = tweet_train_dtm_uni_all, method = "class", cp = 0, minsplit = 1, maxdepth = 4)
+# s
+# # plot tree
+# prp(max.ct_uni, box.palette="RdBu", shadow.col="gray",type = 1, extra = 1, under = TRUE, split.font = 1, varlen = -10) 
+
+```
+**Decision Tree Unigram Interpretation:**
+1) Accuracy of Train Set:- 0.877
+2) Accuracy of Test Set:- 0.865
+3) It shows that the model is not overfitting
+4) Looking at the Decision tree Plot following points has observed:
+a) If we look at the left branch of the tree, the text which does not contains words like **Thank, great, love, amaz, awesome** will classify as Negative.
+b) If we look at the right branch of the tree, the text which contains thank but hour is >= 1 is classified as negative. As expected in the case of the sarcastic tweet.
+c) Similar behavior can be observed in the case of text which contains thank, has **hour<1 and miss > 1** is classified as negative. 
+                
+                
+### b) Random Forest Unigram(merged word) Model
+
+```{r Random forest unigram(mergedData)}
+set.seed(123)
+RFmodel_uni <- randomForest(airline_sentiment~.,data=tweet_train_dtm_uni_all, ntree=50)
+
+##Train Set
+RFmodel_predict_uni_train <- predict(RFmodel_uni, newdata=tweet_train_dtm_uni_all,type = "class")
+CM_RF_Uni_Train<-confusionMatrix(RFmodel_predict_uni_train, tweet_train_dtm_uni_all$airline_sentiment)
+
+##Test Set
+RFmodel_predict_uni_test <- predict(RFmodel_uni, newdata=tweet_test_dtm_uni_all,type = "class")
+CM_RF_Uni_Test<-confusionMatrix(RFmodel_predict_uni_test, tweet_test_dtm_uni_all$airline_sentiment)
+
+
+fourfoldplot(CM_RF_Uni_Test$table, main = "Confusion Matrix for Test set",conf.level = 0, margin = 1)
+Trainscore_error_RF_Uni<- round((1-CM_RF_Uni_Train$overall["Accuracy"]),4)
+Testscore_error_RF_Uni<- round((1-CM_RF_Uni_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_RF_Uni),"Test score error:",unname(Testscore_error_RF_Uni),sep="\n")
+
+varImpPlot(RFmodel_uni,sort = TRUE)
+
+```
+**Random Forest Unigram Interpretation**: Train set accuracy: 0.947, Test set accuracy: 0.883. Its shows sign of little overfitting. The tree splitted on the word Thank.
+
+
+
+### d) SVM Linear Unigram (merged word) Model
+Executed SVM Linear unigram model for hyperparameter tuning and identified optimize cost parameters.As its Execution nearly took more than 2 hours so after finding optimized C value used that in code and commented code for hyperparameter tuning.
+```{r SVM Linear Unigram(merged data)}
+
+set.seed(123)
+svm_Linear <- svm(airline_sentiment ~., data = tweet_train_dtm_uni_all, kernel = "linear",cost=0.1)
+#summary(svm_Linear)
+
+# Train set
+SVM_pred_train <- predict(svm_Linear, tweet_train_dtm_uni_all)
+# Performance evaluation - confusion matrix
+CM_SVM_Uni_Train<-confusionMatrix(SVM_pred_train, tweet_train_dtm_uni_all$airline_sentiment)
+
+
+# Test Set
+SVM_pred_test <- predict(svm_Linear, tweet_test_dtm_uni_all)
+# Performance evaluation - confusion matrix
+CM_SVM_Uni_Test <-confusionMatrix(SVM_pred_test, tweet_test_dtm_uni_all$airline_sentiment)
+
+
+fourfoldplot(CM_SVM_Uni_Test$table, main = "Confusion Matrix for Test set",conf.level = 0, margin = 1)
+Trainscore_error_SVM_Uni<- round((1-CM_SVM_Uni_Train$overall["Accuracy"]),4)
+Testscore_error_SVM_Uni<- round((1-CM_SVM_Uni_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_SVM_Uni),"Test score error:",unname(Testscore_error_SVM_Uni),sep="\n")
+
+###Below code were use to optimize cost parameter.As its Execution nearly took more than 2 hour so after finding optimized C value used that. So commented below code
+
+## Hyperparameter Optimization 
+#set.seed(123)
+#tunesvm_opt_Linear <- tune(svm, airline_sentiment ~., data = tweet_train_dtm_uni_all,kernel = "linear",ranges = list(cost = c(0.01,0.1,1:3)))
+#summary(tunesvm_opt_Linear)
+#plot(tunesvm_opt_Linear$performances[c('cost','error')],type='b',main="Cost vs Error rate plot for training dataset")
+
+#svm_new_Linear <- svm(airline_sentiment ~., data = tweet_train_dtm_uni_all,kernel ="linear",cost =tunesvm_opt_Linear$best.model$cost)
+#summary(svm_new_Linear)
+#pred_SVM_Linear <- predict(svm_new_Linear, tweet_test_dtm_uni_all)
+
+# Performance evaluation - confusion matrix
+#confusionMatrix(table(pred_SVM_Linear, tweet_test_dtm_uni_all$airline_sentiment))
+```
+**SVM Linear Model Interpretation**: Train set accuracy: 0.908, Test set accuracy: 0.887. **SVM linear model shows best accuracy among all model.**
+
+## (B) Model based on Bigram
+
+#### Create a Document Term Matrix for Bigram and Split data into training(0.70) and test set(0.30)
+```{r DTM Bigram Train and Test split}
+
+BigramTokenizer <-
+  function(x)
+    unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+
+tweet_dtm_bi <- DocumentTermMatrix(corpus,control = list(tokenize = BigramTokenizer))
+tweet_dtm_bi
+# keep only terms that appers in 0.15% or more of tweets
+tweet_dtm_bi <- removeSparseTerms(tweet_dtm_bi, 0.9985) 
+tweet_dtm_bi
+tweet_dtm_bi <- as.data.frame(as.matrix(tweet_dtm_bi))
+colnames(tweet_dtm_bi) <- make.names(colnames(tweet_dtm_bi))
+
+# Combine data frame generated from TRM with original data set to get original columns
+tweet_dtm_bi_all <- cbind(tweet_subset, tweet_dtm_bi)
+
+# Get rid of the original Text field
+tweet_dtm_bi_all$text <- NULL
+#colnames(tweet_dtm_bi_all)
+################################# TRAIN/TEST SPLIT #################################
+
+set.seed(123)
+dt <- sort(sample(nrow(tweet_dtm_bi_all), nrow(tweet_dtm_bi_all)*.7))
+tweet_train_dtm_bi_all<-tweet_dtm_bi_all[dt,]
+tweet_test_dtm_bi_all<-tweet_dtm_bi_all[-dt,]
+
+```
+**Interpretation:**   
+1) We can see that DTM has 11541 documents and 67142 terms. This document has a lot of sparse terms.
+2) Removed terms that dont appear often (keep only terms that appears in 0.15% or more of tweets).
+
+### a) Decision Tree Bigram Model
+The complexity parameter (cp) is used to control the size of the decision tree and to select the optimal tree size.The default value of cp is 0.01. A value of cp = 1 will result in a tree with no splits. Setting cp to a negative values ensures a fully grown tree.Therefore,
+As at CP =0, tree was not splitting into more branches so I have used cp=-1, which gives fully grown tree. 
+```{r BIGRAM Decision Tree }
+
+################################# RUN DECISION TREE MODEL #################################
+set.seed(123)
+DTmodel_bi <- rpart(airline_sentiment ~ ., data = tweet_train_dtm_bi_all, method = "class",minsplit = 2, maxdepth = 5)
+
+##Train Set
+DTmodel_predict_bi_train <- predict(DTmodel_bi, tweet_train_dtm_bi_all, type = "class")
+CM_DT_Bi_Train<- confusionMatrix(DTmodel_predict_bi_train, tweet_train_dtm_bi_all$airline_sentiment)
+
+
+ 
+## Test set
+DTmodel_predict_bi_test <- predict(DTmodel_bi, tweet_test_dtm_bi_all, type = "class")
+CM_DT_Bi_Test<-confusionMatrix(DTmodel_predict_bi_test, tweet_test_dtm_bi_all$airline_sentiment)
+
+
+fourfoldplot(CM_DT_Bi_Test$table, main = "Confusion Matrix for Test set",conf.level = 0, margin = 1)
+Trainscore_error_DT_Bi<- round((1-CM_DT_Bi_Train$overall["Accuracy"]),4)
+Testscore_error_DT_Bi<- round((1-CM_DT_Bi_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_DT_Bi),"Test score error:",unname(Testscore_error_DT_Bi),sep="\n")
+
+# plot tree
+rpart.plot(DTmodel_bi, box.palette="RdBu", shadow.col="gray", nn=TRUE,type = 2,extra = 2,under = FALSE, split.font = 1, varlen = -10)
+
+# Pruned Tree at cp=-1 Decision tree gives fully growntree
+max.ct <- rpart(airline_sentiment ~ ., data = tweet_train_dtm_bi_all, method = "class", cp = -1, minsplit = 1, maxdepth = 5)
+
+# plot tree
+prp(max.ct, box.palette="RdBu", shadow.col="gray",type = 1, extra = 1, under = TRUE, split.font = 1, varlen = -10)  
+
+```
+**Decision Tree Bigram Interpretation:** Train set accuracy: 0.804, Test set accuracy: 0.787. The word on which tree is splitting is **thank.help**. 
+If **Thank.help** is present tweet is positive else negative. If tweets does not have word like great.thank, no worries, ok.thank and great.service. It has been classified as negative.
+
+
+### b) Random Forest Bigram Model
+
+ 
+```{r RandomForest Bigram }
+set.seed(123)
+RFmodel_bi <- randomForest(airline_sentiment~.,data=tweet_train_dtm_bi_all, ntree=50)
+
+
+##Train Set
+RFmodel_predict_bi_train <- predict(RFmodel_bi, newdata=tweet_train_dtm_bi_all,type = "class")
+CM_RF_Bi_Train<-confusionMatrix(RFmodel_predict_bi_train, tweet_train_dtm_bi_all$airline_sentiment)
+
+##Test Set
+RFmodel_predict_bi_test <- predict(RFmodel_bi, newdata=tweet_test_dtm_bi_all,type = "class")
+CM_RF_Bi_Test<-confusionMatrix(RFmodel_predict_bi_test, tweet_test_dtm_bi_all$airline_sentiment)
+
+fourfoldplot(CM_RF_Bi_Test$table, main = "Confusion Matrix for Test set",conf.level = 0, margin = 1)
+Trainscore_error_RF_Bi<- round((1-CM_RF_Bi_Train$overall["Accuracy"]),4)
+Testscore_error_RF_Bi<- round((1-CM_RF_Bi_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_RF_Bi),"Test score error:",unname(Testscore_error_RF_Bi),sep="\n")
+
+varImpPlot(RFmodel_bi,sort = TRUE)
+
+```
+**RF Model Bigram Interpretation:** Train set accuracy: 0.819, Test set accuracy: 0.802.The word on which tree is splitting is _thank.help_ which is similar to one which we had in Decision Tree.  
+
+### c) SVM Linear Bigram Model
+Executed the SVM Linear model to find out optimize cost parameters.As its Execution nearly took more than 2 hours so after finding an optimized C value which is 0.1 used that in the code directly.
+```{r SVM Linear Bigram}
+
+set.seed(123)
+svm_Linear_bi <- svm(airline_sentiment ~., data = tweet_train_dtm_bi_all, kernel = "linear",cost=0.1)
+#summary(svm_Linear)
+
+
+# Train set
+SVM_pred_bi_train <- predict(svm_Linear_bi, tweet_train_dtm_bi_all)
+# Performance evaluation - confusion matrix
+CM_SVM_Bi_Train<-confusionMatrix(SVM_pred_bi_train, tweet_train_dtm_bi_all$airline_sentiment)
+
+
+# Test Set
+SVM_pred_bi_test <- predict(svm_Linear_bi, tweet_test_dtm_bi_all)
+# Performance evaluation - confusion matrix
+CM_SVM_Bi_Test <-confusionMatrix(SVM_pred_bi_test, tweet_test_dtm_bi_all$airline_sentiment)
+
+fourfoldplot(CM_SVM_Bi_Test$table, main = "Confusion Matrix for Test set",conf.level = 0, margin = 1)
+Trainscore_error_SVM_Bi<- round((1-CM_SVM_Bi_Train$overall["Accuracy"]),4)
+Testscore_error_SVM_Bi<- round((1-CM_SVM_Bi_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_SVM_Bi),"Test score error:",unname(Testscore_error_SVM_Bi),sep="\n")
+
+```
+**SVM(kernel:Linear) Bigram Interpretation:** Train set accuracy: 0.821, Test set accuracy: 0.80
+
+# 8) Conclusion : 
+
+## a) Model Comparision and Reporting best model based on AUC value
+
+AUC measures the performance of a binary classifier averaged across all possible decision thresholds.
+```{r Model Comparision,message=FALSE}
+
+DecisionTree.roc <- roc(response = tweet_test_dtm_uni_all$airline_sentiment, predictor = as.numeric(DTmodel_predict_uni_test))
+RandomForest.roc <- roc(response = tweet_test_dtm_uni_all$airline_sentiment, predictor = as.numeric(RFmodel_predict_uni_test))
+SVM_Linear.roc <- roc(response = tweet_test_dtm_uni_all$airline_sentiment, predictor = as.numeric(SVM_pred_test))
+
+DecisionTree_Bigram.roc <- roc(response = tweet_test_dtm_bi_all$airline_sentiment, predictor = as.numeric(DTmodel_predict_bi_test))
+RandomForest_Bigram.roc <- roc(response = tweet_test_dtm_bi_all$airline_sentiment, predictor = as.numeric(RFmodel_predict_bi_test))
+SVM_Linear_Bigram.roc <- roc(response = tweet_test_dtm_bi_all$airline_sentiment, predictor = as.numeric(SVM_pred_bi_test))
+
+
+
+# cat("auc Score for Decision Tree Unigram: ",auc(DecisionTree.roc),"auc Score for Random Forest Unigram: ",auc(RandomForest.roc),"auc Score for SVM Linear Unigram: ",auc(SVM_Linear.roc),"auc Score for Decision Tree Bigram: ",auc(DecisionTree_Bigram.roc),"auc Score for Random Forest Bigram: ",auc(RandomForest_Bigram.roc),"auc Score for SVM_Linear Bigram: ",auc(SVM_Linear_Bigram.roc),sep="\n")
+
+
+
+plot(SVM_Linear.roc,  col = "red",    legacy.axes = TRUE, print.auc.y = 0.99, print.auc = TRUE)
+plot(RandomForest.roc, col = "blue", add = TRUE, print.auc.y = 0.45, print.auc = TRUE)
+plot(DecisionTree.roc, col = "black", add = TRUE, print.auc.y = 0.35, print.auc = TRUE)
+plot(DecisionTree_Bigram.roc, col = "orange", add = TRUE, print.auc.y = 0.25, print.auc = TRUE)
+plot(RandomForest_Bigram.roc, col = "purple", add = TRUE, print.auc.y = 0.15, print.auc = TRUE)
+plot(SVM_Linear_Bigram.roc, col = "green", add = TRUE, print.auc.y = 0.05, print.auc = TRUE)
+
+legend("right", c( "SVM Linear Unigram","Random Forest Unigram","Decision Tree Unigram","Decision Tree Bigram","Random Forest Bigram","SVM Linear Bigram"),
+       lty = c(1,1), lwd = c(2, 2), col = c( "red","blue", "black","orange","purple","green"), cex = 0.75)
+
+```
+**ROC Curve Interpretation:** It is evident from the above plot, that **SVM Linear(unigram)** is the best model for classifying US airline Twitter sentiments with the **highest area under curve value(0.787)**. Random Forest and Decision Tree also create a good model that has auc value pretty close to SVM Linear Model. Comparatively, Bigram Decision Tree and Random Forest model are not performing that well in classifying the tweet.
+
+## b) Model Comparision based On F1 score, Trainset and Testset accuracy and AUC score
+
+As the dataset is highly imbalanced, So can not just rely on accuracy as our only scoring function hence will consider F1 and AUC for selecting the best model.
+
+```{r Model Train and TEST error comaprision}
+
+
+rowLabels <- c("Decision Tree Unigram","Random Forest Unigram","SVM Linear Unigram","Decision Tree Bigram","Random Forest Bigram","SVM Linear Bigram")
+
+testAccuracy <-c(round((CM_DT_Uni_Test$overall["Accuracy"]),4)*100,
+             round((CM_RF_Uni_Test$overall["Accuracy"]),4)*100,
+             round((CM_SVM_Uni_Test$overall["Accuracy"]),4)*100,
+             round((CM_DT_Bi_Test$overall["Accuracy"]),4)*100,
+             round((CM_RF_Bi_Test$overall["Accuracy"]),4)*100,
+             round((CM_SVM_Bi_Test$overall["Accuracy"] ),4)*100)
+
+
+TrainAccuracy <-c(round((CM_DT_Uni_Train$overall["Accuracy"]),4)*100,
+             round((CM_RF_Uni_Train$overall["Accuracy"]),4)*100,
+             round((CM_SVM_Uni_Train$overall["Accuracy"]),4)*100,
+             round((CM_DT_Bi_Train$overall["Accuracy"]),4)*100,
+             round((CM_RF_Bi_Train$overall["Accuracy"]),4)*100,
+             round((CM_SVM_Bi_Train$overall["Accuracy"]),4)*100)
+
+
+F1Score <-c(round((CM_DT_Uni_Test$byClass["F1"]),4)*100,
+             round((CM_RF_Uni_Test$byClass["F1"]),4)*100,
+             round((CM_SVM_Uni_Test$byClass["F1"]),4)*100,
+             round((CM_DT_Bi_Test$byClass["F1"]),4)*100,
+             round((CM_RF_Bi_Test$byClass["F1"]),4)*100,
+             round((CM_SVM_Bi_Test$byClass["F1"]),4)*100)
+
+aucScore <-c(round((auc(DecisionTree.roc)),4)*100,
+             round((auc(RandomForest.roc)),4)*100,
+             round((auc(SVM_Linear.roc)),4)*100,
+             round((auc(DecisionTree_Bigram.roc)),4)*100,
+             round((auc(RandomForest_Bigram.roc)),4)*100,
+             round((auc(SVM_Linear_Bigram.roc)),4)*100)
+             
+             
+                
+
+result_df <-data.frame(testAccuracy,TrainAccuracy,F1Score,aucScore,row.names = rowLabels)
+colnames(result_df)<-c("Test Accuracy(%)","Train Accuracy(%)","F1 score","AUC score")
+#print(result_df)
+kable(result_df, caption = "Model Comparison",format = 'markdown')
+
+
+```
+**Interpretation:** From the above model comparison table, it is evident that **SVM Linear Unigram** has the highest F1 score and AUC value. Its train and test set accuracy is also good. Therefore, It is the best algorithm to train our model for prediction. Although, Random Forest unigram is also giving good accuracy but shows the chance of overfitting. 
+
+# 9) Appendix :
+
+## a) Logistic Regression Unigram(merged word) Model
+
+Executed Logistic Regression for Unigram with the merged word. Its accuracy was very less nearly 0.12. Therefore, did not include in the model comparison.
+
+```{r UNIGRAM(merged term) Logistic Regression,fig.width=4, fig.height=4}
+
+################################# RUN DECISION TREE MODEL #################################
+set.seed(123)
+
+#kept thershold =0.5
+# Performance evaluation - confusion matrix
+LRmodel_uni <- glm(airline_sentiment ~ ., data = tweet_train_dtm_uni_all,family = binomial)
+
+##Train Set
+LRmodel_predict_uni_train <- predict(LRmodel_uni,newdata= tweet_train_dtm_uni_all, type="response")
+pred_neg_train <- factor(ifelse(LRmodel_predict_uni_train >= 0.50, "negative", "positive"))
+actual_neg_train <- factor(ifelse(tweet_train_dtm_uni_all$airline_sentiment=='negative',"negative","positive"))
+CM_LR_Uni_Train<-confusionMatrix(pred_neg_train,actual_neg_train)
+fourfoldplot(CM_LR_Uni_Train$table, main = "Confusion Matrix for Train set",conf.level = 0, margin = 1)
+
+## Test set
+LRmodel_predict_uni_test <- predict(LRmodel_uni,newdata= tweet_test_dtm_uni_all, type="response")
+pred_neg_test <- factor(ifelse(LRmodel_predict_uni_test >= 0.50, "negative", "positive"))
+actual_neg_test <- factor(ifelse(tweet_test_dtm_uni_all$airline_sentiment=='negative',"negative","positive"))
+CM_LR_Uni_Test<-confusionMatrix(pred_neg_test,actual_neg_test)
+fourfoldplot(CM_LR_Uni_Test$table, main = "Confusion Matrix for Test set",conf.level = 0, margin = 1)
+
+Trainscore_error_LR_Uni<- round((1-CM_LR_Uni_Train$overall["Accuracy"]),4)
+Testscore_error_LR_Uni<- round((1-CM_LR_Uni_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_LR_Uni),"Test score error:",unname(Testscore_error_LR_Uni),sep="\n")
+
+
+```
+
+
+## b) Naive Bayes Unigram(merged word) Model
+
+Executed Naive Baise for Unigram with the merged word. Its accuracy was very good nearly  0.84.  However, when I was sampling data e.g rather than taking full train dataset, if I will take only 5000 or 4000 samples in training set its accuracy was changing drastically from the range of 0.54 to 0.78. Therefore, did not include in the model comparison.
+
+```{r UNIGRAM(merged term) Naive Bayes,fig.width=4, fig.height=4}
+
+################################# RUN DECISION TREE MODEL #################################
+set.seed(123)
+# Performance evaluation - confusion matrix
+NBmodel_uni <- naiveBayes(airline_sentiment ~ ., data = tweet_train_dtm_uni_all)
+
+# Train set
+NB_pred_uni_train <- predict(NBmodel_uni, tweet_train_dtm_uni_all[,-1])
+# Performance evaluation - confusion matrix
+CM_NB_uni_Train<-confusionMatrix(NB_pred_uni_train, tweet_train_dtm_uni_all$airline_sentiment)
+fourfoldplot(CM_NB_uni_Train$table, main = "Confusion Matrix for Train set",conf.level = 0, margin = 1)
+
+# Test Set
+NB_pred_uni_test <- predict(NBmodel_uni, tweet_test_dtm_uni_all[,-1])
+# Performance evaluation - confusion matrix
+CM_NB_uni_Test <-confusionMatrix(NB_pred_uni_test, tweet_test_dtm_uni_all$airline_sentiment)
+fourfoldplot(CM_NB_uni_Test$table, main = "Confusion Matrix for Test set",conf.level = 0, margin = 1)
+
+Trainscore_error_NB_uni<- round((1-CM_SVM_Bi_Train$overall["Accuracy"]),4)
+Testscore_error_NB_uni<- round((1-CM_SVM_Bi_Test$overall["Accuracy"]),4)
+cat("Train score error:",unname(Trainscore_error_NB_uni),"Test score error:",unname(Testscore_error_NB_uni),sep="\n")
+
+```                
